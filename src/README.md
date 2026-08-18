@@ -39,6 +39,18 @@ A FastAPI application that enables Slalom consultants to register their capabili
 | GET    | `/capabilities`                                                   | Get all capabilities with details and current consultant assignments |
 | POST   | `/capabilities/{capability_name}/register?email=consultant@slalom.com` | Register consultant for a capability                     |
 | DELETE | `/capabilities/{capability_name}/unregister?email=consultant@slalom.com` | Unregister consultant from a capability              |
+| POST | `/auth/login` | Start an authenticated session |
+| POST | `/auth/logout` | End the current session |
+| GET | `/auth/me` | Get the current signed-in user |
+
+Authentication uses HTTP-only session cookies. Store practice lead accounts in
+`src/practice_leads.json` or provide the JSON object through
+`PRACTICE_LEADS_JSON`. Each account must contain a PBKDF2 password hash and may
+specify `role` as `practice_lead` or `consultant`; consultant accounts should
+also specify their `email`. Generate a hash with
+`python -c "from app import hash_password; print(hash_password('your-password'))"`
+from the `src` directory. Registration requires authentication; unregistering
+requires the `practice_lead` role.
 
 ## Data Model
 

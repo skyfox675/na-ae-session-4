@@ -3,6 +3,29 @@ document.addEventListener("DOMContentLoaded", () => {
   const capabilitySelect = document.getElementById("capability");
   const registerForm = document.getElementById("register-form");
   const messageDiv = document.getElementById("message");
+  const loginForm = document.getElementById("login-form");
+  const signedIn = document.getElementById("signed-in");
+  const userDetails = document.getElementById("user-details");
+  const logoutButton = document.getElementById("logout-button");
+  let currentUser = null;
+
+  function updateAuthControls() {
+    const isSignedIn = Boolean(currentUser);
+    loginForm.classList.toggle("hidden", isSignedIn);
+    signedIn.classList.toggle("hidden", !isSignedIn);
+    if (currentUser) {
+      userDetails.textContent = `${currentUser.username} (${currentUser.role.replace("_", " ")})`;
+    }
+    document.querySelectorAll(".delete-btn").forEach((button) => {
+      button.classList.toggle("hidden", currentUser?.role !== "practice_lead");
+    });
+  }
+
+  async function fetchCurrentUser() {
+    const response = await fetch("/auth/me");
+    currentUser = response.ok ? await response.json() : null;
+    updateAuthControls();
+  }
 
   // Function to fetch capabilities from API
   async function fetchCapabilities() {
@@ -62,6 +85,7 @@ document.addEventListener("DOMContentLoaded", () => {
       document.querySelectorAll(".delete-btn").forEach((button) => {
         button.addEventListener("click", handleUnregister);
       });
+      updateAuthControls();
     } catch (error) {
       capabilitiesList.innerHTML =
         "<p>Failed to load capabilities. Please try again later.</p>";
@@ -116,6 +140,13 @@ document.addEventListener("DOMContentLoaded", () => {
   registerForm.addEventListener("submit", async (event) => {
     event.preventDefault();
 
+    if (!currentUser) {
+      messageDiv.textContent = "Please sign in before registering expertise.";
+      messageDiv.className = "error";
+      messageDiv.classList.remove("hidden");
+      return;
+    }
+
     const email = document.getElementById("email").value;
     const capability = document.getElementById("capability").value;
 
@@ -157,6 +188,35 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   });
 
+  loginForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const response = await fetch("/auth/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        username: document.getElementById("username").value,
+        password: document.getElementById("password").value,
+      }),
+    });
+    const result = await response.json();
+    if (!response.ok) {
+      messageDiv.textContent = result.detail || "Unable to sign in.";
+      messageDiv.className = "error";
+      messageDiv.classList.remove("hidden");
+      return;
+    }
+    loginForm.reset();
+    await fetchCurrentUser();
+    fetchCapabilities();
+  });
+
+  logoutButton.addEventListener("click", async () => {
+    await fetch("/auth/logout", { method: "POST" });
+    currentUser = null;
+    updateAuthControls();
+    fetchCapabilities();
+  });
+
   // Initialize app
-  fetchCapabilities();
+  fetchCurrentUser().then(fetchCapabilities);
 });

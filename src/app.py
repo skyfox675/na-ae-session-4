@@ -5,14 +5,79 @@ A FastAPI application that enables Slalom consultants to register their
 capabilities and manage consulting expertise across the organization.
 """
 
-from fastapi import FastAPI, HTTPException
+from fastapi import Cookie, Depends, FastAPI, HTTPException, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import RedirectResponse
+from pydantic import BaseModel
+from datetime import datetime, timedelta, timezone
+import base64
+import hashlib
+import hmac
+import json
 import os
 from pathlib import Path
+import secrets
 
 app = FastAPI(title="Slalom Capabilities Management API",
               description="API for managing consulting capabilities and consultant expertise")
+
+SESSION_COOKIE = "slalom_session"
+SESSION_TTL = timedelta(hours=8)
+practice_leads_path = Path(__file__).with_name("practice_leads.json")
+sessions = {}
+
+
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+
+
+def hash_password(password, salt=None):
+    salt = salt or secrets.token_bytes(16)
+    digest = hashlib.pbkdf2_hmac("sha256", password.encode(), salt, 120000)
+    return f"pbkdf2_sha256$120000${base64.urlsafe_b64encode(salt).decode()}${base64.urlsafe_b64encode(digest).decode()}"
+
+
+def verify_password(password, encoded):
+    try:
+        algorithm, iterations, salt, expected = encoded.split("$", 3)
+        if algorithm != "pbkdf2_sha256":
+            return False
+        actual = hashlib.pbkdf2_hmac(
+            "sha256", password.encode(), base64.urlsafe_b64decode(salt), int(iterations)
+        )
+        return hmac.compare_digest(base64.urlsafe_b64encode(actual).decode(), expected)
+    except (ValueError, TypeError):
+        return False
+
+
+def load_practice_leads():
+    configured = os.getenv("PRACTICE_LEADS_JSON")
+    if configured:
+        return json.loads(configured)
+    if practice_leads_path.exists():
+        with practice_leads_path.open(encoding="utf-8") as file:
+            return json.load(file)
+    return {}
+
+
+practice_leads = load_practice_leads()
+
+
+def get_current_user(session_token: str | None = Cookie(default=None, alias=SESSION_COOKIE)):
+    if not session_token or session_token not in sessions:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    session = sessions[session_token]
+    if session["expires_at"] <= datetime.now(timezone.utc):
+        sessions.pop(session_token, None)
+        raise HTTPException(status_code=401, detail="Session expired")
+    return session
+
+
+def require_practice_lead(user=Depends(get_current_user)):
+    if user["role"] != "practice_lead":
+        raise HTTPException(status_code=403, detail="Practice lead access required")
+    return user
 
 # Mount the static files directory
 current_dir = Path(__file__).parent
@@ -115,9 +180,45 @@ def get_capabilities():
     return capabilities
 
 
+@app.get("/auth/me")
+def get_current_user_details(user=Depends(get_current_user)):
+    return {"username": user["username"], "role": user["role"]}
+
+
+@app.post("/auth/login")
+def login(request: LoginRequest, response: Response):
+    account = practice_leads.get(request.username)
+    if not account or not verify_password(request.password, account["password_hash"]):
+        raise HTTPException(status_code=401, detail="Invalid username or password")
+
+    token = secrets.token_urlsafe(32)
+    sessions[token] = {
+        "username": request.username,
+        "role": account.get("role", "practice_lead"),
+        "email": account.get("email"),
+        "expires_at": datetime.now(timezone.utc) + SESSION_TTL,
+    }
+    response.set_cookie(SESSION_COOKIE, token, httponly=True, samesite="lax", max_age=int(SESSION_TTL.total_seconds()))
+    return {
+        "message": "Signed in",
+        "username": request.username,
+        "role": sessions[token]["role"],
+    }
+
+
+@app.post("/auth/logout")
+def logout(response: Response, session_token: str | None = Cookie(default=None, alias=SESSION_COOKIE)):
+    if session_token:
+        sessions.pop(session_token, None)
+    response.delete_cookie(SESSION_COOKIE)
+    return {"message": "Signed out"}
+
+
 @app.post("/capabilities/{capability_name}/register")
-def register_for_capability(capability_name: str, email: str):
+def register_for_capability(capability_name: str, email: str, user=Depends(get_current_user)):
     """Register a consultant for a capability"""
+    if user["role"] == "consultant" and user.get("email") != email:
+        raise HTTPException(status_code=403, detail="Consultants may only register themselves")
     # Validate capability exists
     if capability_name not in capabilities:
         raise HTTPException(status_code=404, detail="Capability not found")
@@ -138,7 +239,7 @@ def register_for_capability(capability_name: str, email: str):
 
 
 @app.delete("/capabilities/{capability_name}/unregister")
-def unregister_from_capability(capability_name: str, email: str):
+def unregister_from_capability(capability_name: str, email: str, user=Depends(require_practice_lead)):
     """Unregister a consultant from a capability"""
     # Validate capability exists
     if capability_name not in capabilities:
