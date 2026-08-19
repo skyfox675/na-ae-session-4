@@ -15,6 +15,17 @@
           <h2>Consulting Expertise Platform</h2>
         </div>
       </div>
+      <div class="auth-panel">
+        <form id="login-form">
+          <input type="text" id="username" required placeholder="Practice lead username" autocomplete="username" />
+          <input type="password" id="password" required placeholder="Password" autocomplete="current-password" />
+          <button type="submit">Sign in</button>
+        </form>
+        <div id="signed-in" class="hidden">
+          <span id="user-details"></span>
+          <button id="logout-button" type="button">Sign out</button>
+        </div>
+      </div>
     </header>
 
     <main>
